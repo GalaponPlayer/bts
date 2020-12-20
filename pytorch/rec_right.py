@@ -20,6 +20,7 @@ import os
 import argparse
 import time
 import numpy as np
+from torch.serialization import save
 import cv2
 import sys
 
@@ -34,6 +35,24 @@ from tqdm import tqdm
 
 from bts_dataloader import *
 
+def read_calib_file(filepath):
+    ''' Read in a calibration file and parse into a dictionary.
+    Ref: https://github.com/utiasSTARS/pykitti/blob/master/pykitti/utils.py
+    '''
+    data = {}
+    with open(filepath, 'r') as f:
+        for line in f.readlines():
+            line = line.rstrip()
+            if len(line)==0: continue
+            key, value = line.split(':', 1)
+            # The only non-float values in these files are dates, which
+            # we don't care about anyway
+            try:
+                data[key] = np.array([float(x) for x in value.split()])
+            except ValueError:
+                pass
+
+    return data
 
 def convert_arg_line_to_args(arg_line):
     for arg in arg_line.split():
@@ -58,6 +77,8 @@ parser.add_argument('--dataset', type=str, help='dataset to train on, make3d or 
 parser.add_argument('--do_kb_crop', help='if set, crop input images as kitti benchmark images', action='store_true')
 parser.add_argument('--save_lpg', help='if set, save outputs from lpg layers', action='store_true')
 parser.add_argument('--bts_size', type=int,   help='initial num_filters in bts', default=512)
+parser.add_argument('--input_dir', type=str, help='file dir from which reconst right views')
+parser.add_argument('--output_dir', type=str, help='output directory')
 
 if sys.argv.__len__() == 2:
     arg_filename_with_prefix = '@' + sys.argv[1]
@@ -84,7 +105,21 @@ def get_num_lines(file_path):
 def test(params):
     """Test function."""
     args.mode = 'test'
-    dataloader = BtsDataLoader(args, 'test')
+    #dataloader = BtsDataLoader(args, 'test')
+
+    print(params.input_dir)
+
+    image_path = os.path.join(params.input_dir, 'image_2')
+    calib_path = os.path.join(params.input_dir, 'calib')
+
+    img_names = os.listdir(image_path)
+    calib_names = os.listdir(calib_path)
+    img_names.sort()
+    calib_names.sort()
+
+    img_paths = [os.path.join(image_path, file_name) for file_name in img_names]
+    calib_paths = [os.path.join(calib_path, calib_name) for calib_name in calib_names]
+
     
     model = BtsModel(params=args)
     model = torch.nn.DataParallel(model)
@@ -94,10 +129,8 @@ def test(params):
     model.eval()
     model.cuda()
 
-    num_test_samples = get_num_lines(args.filenames_file)
-
-    with open(args.filenames_file) as f:
-        lines = f.readlines()
+    #num_test_samples = get_num_lines(args.filenames_file)
+    num_test_samples = len(img_names)
 
     print('now testing {} files with {}'.format(num_test_samples, args.checkpoint_path))
 
@@ -107,12 +140,35 @@ def test(params):
     pred_2x2s = []
     pred_1x1s = []
 
+    toTensor = ToTensor(params.mode)
+
     start_time = time.time()
     with torch.no_grad():
-        for _, sample in enumerate(tqdm(dataloader.data)):
+        for img_name, calib_name in tqdm(zip(img_paths, calib_paths)):
+            if img_name == img_paths[100]:
+                break
+            image = np.asarray(Image.open(img_name), dtype=np.float32) / 255.0
+            height = image.shape[0]
+            width = image.shape[1]
+            top_margin = int(height - 352)
+            left_margin = int((width - 1216) / 2)
+            image = image[top_margin:top_margin + 352, left_margin:left_margin + 1216, :]
+
+            calib = read_calib_file(calib_name)
+            focal = float(calib['P2'][0])
+
+            image = toTensor.to_tensor(image)
+            focal = torch.tensor([focal])
+            image = torch.reshape(image, (1, 3, 352, 1216))
+
+            sample = {'image': image, 'focal': focal}
+
             image = Variable(sample['image'].cuda())
             focal = Variable(sample['focal'].cuda())
             # Predict
+            # print('rec main')
+            # print(image.shape)
+            # print(focal.shape)
             lpg8x8, lpg4x4, lpg2x2, reduc1x1, depth_est = model(image, focal)
             pred_depths.append(depth_est.cpu().numpy().squeeze())
             pred_8x8s.append(lpg8x8[0].cpu().numpy().squeeze())
@@ -125,6 +181,7 @@ def test(params):
     print('Done.')
     
     save_name = 'result_' + args.model_name
+    save_name = params.output_dir
     
     print('Saving result pngs..')
     if not os.path.exists(os.path.dirname(save_name)):
@@ -139,33 +196,15 @@ def test(params):
                 raise
     
     for s in tqdm(range(num_test_samples)):
+        if s == 98:
+            break
         if args.dataset == 'kitti':
-            date_drive = lines[s].split('/')[1]
-            filename_pred_png = save_name + '/raw/' + date_drive + '_' + lines[s].split()[0].split('/')[-1].replace(
-                '.jpg', '.png')
-            filename_cmap_png = save_name + '/cmap/' + date_drive + '_' + lines[s].split()[0].split('/')[
-                -1].replace('.jpg', '.png')
-            filename_image_png = save_name + '/rgb/' + date_drive + '_' + lines[s].split()[0].split('/')[-1]
-        elif args.dataset == 'kitti_benchmark':
-            filename_pred_png = save_name + '/raw/' + lines[s].split()[0].split('/')[-1].replace('.jpg', '.png')
-            filename_cmap_png = save_name + '/cmap/' + lines[s].split()[0].split('/')[-1].replace('.jpg', '.png')
-            filename_image_png = save_name + '/rgb/' + lines[s].split()[0].split('/')[-1]
-        else:
-            scene_name = lines[s].split()[0].split('/')[0]
-            filename_pred_png = save_name + '/raw/' + scene_name + '_' + lines[s].split()[0].split('/')[1].replace(
-                '.jpg', '.png')
-            filename_cmap_png = save_name + '/cmap/' + scene_name + '_' + lines[s].split()[0].split('/')[1].replace(
-                '.jpg', '.png')
-            filename_gt_png = save_name + '/gt/' + scene_name + '_' + lines[s].split()[0].split('/')[1].replace(
-                '.jpg', '.png')
-            filename_image_png = save_name + '/rgb/' + scene_name + '_' + lines[s].split()[0].split('/')[1]
+            filename_pred_png = save_name + '/raw/' + img_names[s]
+            filename_cmap_png = save_name + '/camp/' + img_names[s]
+            filename_image_png = save_name + '/rgb/' + img_names[s]
         
-        rgb_path = os.path.join(args.data_path, './' + lines[s].split()[0])
-        image = cv2.imread(rgb_path)
-        if args.dataset == 'nyu':
-            gt_path = os.path.join(args.data_path, './' + lines[s].split()[1])
-            gt = cv2.imread(gt_path, -1).astype(np.float32) / 1000.0  # Visualization purpose only
-            gt[gt == 0] = np.amax(gt)
+        #rgb_path = os.path.join(args.data_path, './' + lines[s].split()[0])
+        #image = cv2.imread(rgb_path)
         
         pred_depth = pred_depths[s]
         pred_8x8 = pred_8x8s[s]
@@ -180,6 +219,7 @@ def test(params):
         
         pred_depth_scaled = pred_depth_scaled.astype(np.uint16)
         cv2.imwrite(filename_pred_png, pred_depth_scaled, [cv2.IMWRITE_PNG_COMPRESSION, 0])
+        print('saved : ' + filename_pred_png)
         print(pred_depth_scaled.shape)
         
         if args.save_lpg:
