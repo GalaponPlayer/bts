@@ -1,0 +1,3 @@
+--data_dir /data/kishida/KITTI_object/training/
+--depth_dir /data/kishida/bts_outputs/pred_depth/test/raw/
+--output_dir /data/kishida/bts_outputs/rec_right/test/

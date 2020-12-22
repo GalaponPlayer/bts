@@ -1,6 +1,11 @@
 # Created by https://www.gitignore.io/api/c++,python
 # Edit at https://www.gitignore.io/?templates=c++,python
 
+# my own
+pytorch/KITTI_object/
+pytorch/bts_outputs/
+pytorch/models/
+
 # Notebook checkpoints
 .ipynb_checkpoints
 

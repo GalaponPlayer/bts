@@ -8,5 +8,5 @@
 --input_width 1216
 --max_depth 80
 --do_kb_crop
---input_dir /home/yusuke/kitti_obj/training/
---output_dir /home/yusuke/workspace/bts/pytorch/result_kitti_obj/
+--input_dir /home/kishida/workspace/bts/pytorch/KITTI_object/training/
+--output_dir /home/kishida/workspace/bts/pytorch/bts_outputs/pred_depth/
