@@ -57,18 +57,12 @@ def bilinear_sampler(img, depth, focal=707.0, base=0.54, ifBTS=True):
     x1 = x0 + 1
     x1 = np.clip(x1, 0, input_w - 1)
 
-    pix_l = np.zeros((3, input_h, input_w))
-    pix_r = np.zeros((3, input_h, input_w))
+    x0 = np.repeat(x0[None, :], 3, axis=0)
+    x1 = np.repeat(x1[None, :], 3, axis=0)
 
-    for i in range(3):
-        for j in range(input_h):
-            for k in range(input_w):
-                pix_l[i][j][k] = left[i][j][x0[j][k]]
-    for i in range(3):
-        for j in range(input_h):
-            for k in range(input_w):
-                pix_r[i][j][k] = left[i][j][x1[j][k]]
-    
+    pix_l = np.take_along_axis(left, x0, 2)
+    pix_r = np.take_along_axis(left, x1, 2)
+
     x0 = np.clip(x0, 0, input_w - 2)
     dist_l = x - x0
     dist_r = x1 - x
